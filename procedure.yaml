@@ -1,0 +1,146 @@
+name: Joint Encoder Zeroing and Mastering
+version: 0.1.0
+description: Masters the six joint encoders of an assembled arm against the witness-pin fixture, checks the motor-vs-joint encoder delta per gearbox, measures the procedure's own repeatability, and attaches the mastering file.
+
+unit:
+  auto_identify: true
+  serial_number:
+    description: "Robot serial from the base plate"
+    placeholder: "RB-0000000"
+    pattern: "^RB-\\d{7}$"
+    default_value: "RB-2026041"
+  part_number:
+    default_value: "COBOT-5KG-R2"
+  metadata:
+    mastered:
+      description: "Set by the station once the offsets are written and read back"
+
+operated_by: {}
+
+plugs:
+  - name: Robot Controller
+    description: Service interface of the controller under test (mock six-joint arm)
+    python: plugs.robot:RobotController
+    key: robot
+
+setup:
+  - name: Identify Operator
+    key: identify_operator
+    ui:
+      components:
+        - key: badge
+          type: text_input
+          label: "Scan your badge"
+          required: true
+          bind: run.operated_by
+        - key: fixture_kit
+          type: radio
+          label: "Fixture kit on the bench"
+          required: true
+          bind: measurements.fixture_kit
+          options:
+            - label: "Kit A (serial FIX-A-012)"
+              value: "kit_a"
+            - label: "Kit B (serial FIX-B-007)"
+              value: "kit_b"
+    measurements:
+      - name: Fixture Kit
+        key: fixture_kit
+        validators:
+          - {operator: in, expected_value: ["kit_a", "kit_b"]}
+
+  - name: Interlocks
+    key: interlocks
+    python: phases.interlocks
+    depends_on: [identify_operator]
+    measurements:
+      - name: E-Stop Healthy
+        key: estop_healthy
+        validators:
+          - {operator: "==", expected_value: true}
+
+main:
+  - name: Master Joints
+    key: master_joints
+    python: phases.master_joints
+    ui:
+      components:
+        - key: mastering_progress
+          type: progress
+          label: "Mastering J1 to J6"
+          default_value: 0
+          max: 100
+    measurements:
+      - name: Mastering
+        key: mastering
+        title: Encoder offset and motor-vs-joint delta per joint
+        x_axis: {legend: Joint}
+        y_axis:
+          - legend: Encoder offset
+            key: offset
+            unit: arcsec
+            aggregations:
+              - type: max_abs_deg
+                unit: deg
+                validators:
+                  - {operator: "<=", expected_value: 0.5}
+          - legend: Motor-vs-joint delta
+            key: delta
+            unit: arcmin
+            aggregations:
+              - type: worst_vs_limit
+                validators:
+                  - {operator: "<=", expected_value: 1.0}
+      - name: Offsets
+        key: offsets
+        description: Encoder offset per joint in arcseconds, the fingerprint of this arm's assembly.
+
+  - name: Repeatability
+    key: repeatability
+    python: phases.repeatability
+    depends_on: [master_joints]
+    measurements:
+      - name: Remaster Spread
+        key: remaster_spread
+      - name: Remaster Worst
+        key: remaster_worst
+        unit: deg
+        description: Largest difference between two successive masterings of the same joint.
+        validators:
+          - {operator: "<=", expected_value: 0.005}
+
+  - name: Touch Probe Finish
+    key: touch_probe
+    python: phases.touch_probe
+    enabled: false
+    depends_on: [repeatability]
+    measurements:
+      - name: Probe Residual
+        key: probe_residual
+        unit: deg
+        validators:
+          - {operator: "<=", expected_value: 0.001}
+
+  - name: Verify Written
+    key: verify_written
+    python: phases.verify_written
+    depends_on: [repeatability]
+    measurements:
+      - name: Offsets Written
+        key: offsets_written
+        validators:
+          - {operator: "==", expected_value: true}
+      - name: Multi-Turn Valid
+        key: multiturn_valid
+        validators:
+          - {operator: "==", expected_value: true}
+
+teardown:
+  - name: Brakes Engaged
+    key: brakes_engaged
+    python: phases.brakes_engaged
+    measurements:
+      - name: All Brakes Engaged
+        key: all_brakes_engaged
+        validators:
+          - {operator: "==", expected_value: true}
